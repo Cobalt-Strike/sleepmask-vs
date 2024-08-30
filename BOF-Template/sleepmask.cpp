@@ -20,6 +20,7 @@ extern "C" {
 
 #include "sleepmask-vs.h"
 #include "library\debug.cpp"
+#include "library\extc2.cpp"
 #include "library\utils.cpp"
 #include "library\stdlib.cpp"
 #include "library\sleep.cpp"

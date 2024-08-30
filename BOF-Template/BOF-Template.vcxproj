@@ -231,6 +231,7 @@
     <ClCompile Include="base\mock.cpp" />
     <ClCompile Include="base\mock_syscalls.cpp" />
     <ClCompile Include="library\debug.cpp" />
+    <ClCompile Include="library\extc2.cpp" />
     <ClCompile Include="library\gate.cpp" />
     <ClCompile Include="library\masking.cpp" />
     <ClCompile Include="library\pivot.cpp" />

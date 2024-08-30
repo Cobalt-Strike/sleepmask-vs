@@ -57,7 +57,7 @@ void XORBeacon(BEACON_INFO* beaconInfo, BOOL mask) {
 * @param mask A Boolean value to indicate whether the function is masking/unmasking
 */
 void XORSections(PALLOCATED_MEMORY_REGION allocatedRegion, char* maskKey, BOOL mask) {
-    DFR_LOCAL(KERNEL32, VirtualProtect)    
+    DFR_LOCAL(KERNEL32, VirtualProtect);
     for (int i = 0; i < sizeof(allocatedRegion->Sections) / sizeof(ALLOCATED_MEMORY_SECTION); i++) {
         // Check we have a valid base address
         char* baseAddress = (char*)allocatedRegion->Sections[i].BaseAddress;
@@ -109,6 +109,7 @@ void XORHeapRecords(BEACON_INFO* beaconInfo) {
 * @param buffer The buffer to XOR
 * @param size The size of the buffer
 * @param key The key to XOR the buffer
+* @param keyLength The size of the XOR key
 * @return A Boolean value to indicate success
 */
 BOOL XORData(char* buffer, size_t size, char* key, size_t keyLength) {

