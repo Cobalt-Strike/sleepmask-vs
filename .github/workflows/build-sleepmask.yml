@@ -1,0 +1,363 @@
+name: Build Sleepmask-VS
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+  schedule:
+    - cron: '0 6 * * *'   # every day, 06:00 UTC (00:00/01:00 your time, DST-dependent)
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Sleepmask-VS ${{ matrix.arch }}
+    runs-on: windows-2022
+
+    strategy:
+      fail-fast: false
+    
+      matrix:
+        include:
+          - arch: x64
+            vcvars: amd64
+            processor_architecture: AMD64
+            platform: x64
+            file_pattern: "*.x64.o"
+            artifact_name: sleepmask-bof-x64
+    
+          - arch: x86
+            vcvars: amd64_x86
+            processor_architecture: x86
+            platform: x86
+            file_pattern: "*.x86.o"
+            artifact_name: sleepmask-bof-x86
+        
+    steps:
+      # ---------------------------------------------------------------
+      # 1. Checkout Sleepmask-VS and initialize the BOF-VS submodule
+      # ---------------------------------------------------------------
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # ---------------------------------------------------------------
+      # 2. Synchronize and verify the BOF-VS submodule
+      # ---------------------------------------------------------------
+      - name: Initialize BOF-VS submodule
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+
+          Write-Host "Submodule status:"
+          git submodule status --recursive
+
+          $bofPath = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "bof-vs"
+
+          if (-not (Test-Path $bofPath)) {
+            throw "The bof-vs submodule was not downloaded."
+          }
+
+          $helpers = Get-ChildItem `
+            -Path $bofPath `
+            -Filter "helpers.h" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+          Select-Object -First 1
+
+          if (-not $helpers) {
+            throw "helpers.h was not found in the bof-vs submodule."
+          }
+
+          Write-Host "Found helpers.h:"
+          Write-Host $helpers.FullName
+
+      # ---------------------------------------------------------------
+      # 3. Locate Visual Studio 2022
+      # ---------------------------------------------------------------
+      - name: Locate Visual Studio
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe was not found."
+          }
+
+          $vsPath = & $vswhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+
+          if (-not $vsPath) {
+            throw "Visual Studio with the C++ toolchain was not found."
+          }
+
+          "VS_PATH=$vsPath" |
+          Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8 `
+            -Append
+
+          Write-Host "Visual Studio:"
+          Write-Host $vsPath
+
+      # ---------------------------------------------------------------
+      # 4. Locate the Visual Studio clang-cl compiler
+      # ---------------------------------------------------------------
+      - name: Locate clang-cl.exe
+        shell: pwsh
+        run: |
+          $candidatePaths = @(
+            "$env:VS_PATH\VC\Tools\Llvm\x64\bin\clang-cl.exe",
+            "$env:VS_PATH\VC\Tools\Llvm\bin\clang-cl.exe",
+            "C:\Program Files\LLVM\bin\clang-cl.exe"
+          )
+
+          $clangPath = $candidatePaths |
+          Where-Object {
+            Test-Path $_
+          } |
+          Select-Object -First 1
+
+          if (-not $clangPath) {
+            Write-Host "Searching Visual Studio recursively..."
+
+            $clangPath = Get-ChildItem `
+              -Path $env:VS_PATH `
+              -Filter "clang-cl.exe" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          if (-not $clangPath) {
+            throw "clang-cl.exe was not found."
+          }
+
+          $clangDirectory = Split-Path `
+            -Path $clangPath `
+            -Parent
+
+          "CLANG_CL=$clangPath" |
+          Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8 `
+            -Append
+
+          $clangDirectory |
+          Out-File `
+            -FilePath $env:GITHUB_PATH `
+            -Encoding utf8 `
+            -Append
+
+          Write-Host "clang-cl.exe:"
+          Write-Host $clangPath
+
+          & $clangPath --version
+
+      # ---------------------------------------------------------------
+      # 5. Patch the Makefile because VSAPPIDDIR is empty in Actions
+      # ---------------------------------------------------------------
+      - name: Patch Makefile compiler path
+        shell: pwsh
+        run: |
+          $makefile = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "sleepmask-vs\Makefile"
+
+          if (-not (Test-Path $makefile)) {
+            throw "Makefile was not found: $makefile"
+          }
+
+          if (-not (Test-Path $env:CLANG_CL)) {
+            throw "clang-cl.exe was not found: $env:CLANG_CL"
+          }
+
+          $content = Get-Content `
+            -Path $makefile `
+            -Raw
+
+          if ($content -notmatch '(?m)^CPP\s*=') {
+            throw "The CPP definition was not found in the Makefile."
+          }
+
+          $replacement = 'CPP="' + $env:CLANG_CL + '"'
+
+          $content = $content -replace `
+            '(?m)^CPP\s*=.*$', `
+            $replacement
+
+          Set-Content `
+            -Path $makefile `
+            -Value $content `
+            -Encoding ascii `
+            -NoNewline
+
+          Write-Host "Patched Makefile:"
+          Get-Content $makefile |
+          Select-Object -First 8
+
+      # ---------------------------------------------------------------
+      # 6. Add MSBuild to PATH
+      # ---------------------------------------------------------------
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+
+      # ---------------------------------------------------------------
+      # 7. Build Release x64 or Release x86
+      # ---------------------------------------------------------------
+      - name: Build Release ${{ matrix.arch }}
+        shell: cmd
+        run: |
+          call "%VS_PATH%\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.vcvars }}
+          if errorlevel 1 exit /b 1
+      
+          set "PROCESSOR_ARCHITECTURE=${{ matrix.processor_architecture }}"
+      
+          echo.
+          echo ========================================================
+          echo Building Sleepmask-VS
+          echo Architecture: ${{ matrix.arch }}
+          echo Platform: ${{ matrix.platform }}
+          echo PROCESSOR_ARCHITECTURE: %PROCESSOR_ARCHITECTURE%
+          echo Visual Studio: %VS_PATH%
+          echo Clang: %CLANG_CL%
+          echo ========================================================
+          echo.
+      
+          if /I "${{ matrix.arch }}"=="x86" (
+            if /I not "%PROCESSOR_ARCHITECTURE%"=="x86" (
+              echo ERROR: PROCESSOR_ARCHITECTURE was not set to x86.
+              exit /b 1
+            )
+          )
+      
+          msbuild sleepmask-vs.sln ^
+            /target:Rebuild ^
+            /property:Configuration=Release ^
+            /property:Platform=${{ matrix.platform }} ^
+            /nodeReuse:false ^
+            /verbosity:minimal ^
+            /nologo
+      
+          if errorlevel 1 exit /b 1
+
+      # ---------------------------------------------------------------
+      # 8. Display generated object files
+      # ---------------------------------------------------------------
+      - name: Show generated ${{ matrix.arch }} files
+        shell: pwsh
+        run: |
+          $objects = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter "${{ matrix.file_pattern }}" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue
+
+          if (-not $objects) {
+            Write-Host "All generated .obj and .o files:"
+
+            Get-ChildItem `
+              -Path $env:GITHUB_WORKSPACE `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -eq ".obj" -or
+              $_.Extension -eq ".o"
+            } |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+            throw "No ${{ matrix.file_pattern }} files were generated."
+          }
+
+          $objects |
+          Select-Object FullName, Length |
+          Format-Table -AutoSize
+
+      # ---------------------------------------------------------------
+      # 9. Collect the final BOF files in one artifact directory
+      # ---------------------------------------------------------------
+      - name: Collect ${{ matrix.arch }} BOF files
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            "artifacts"
+
+          $releaseDirectory = Join-Path `
+            $artifactRoot `
+            "${{ matrix.arch }}\Release"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $releaseDirectory `
+            -Force |
+          Out-Null
+
+          $objects = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter "${{ matrix.file_pattern }}" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+          Where-Object {
+            $_.FullName -notlike "$artifactRoot*"
+          }
+
+          if (-not $objects) {
+            throw "No ${{ matrix.file_pattern }} files were generated."
+          }
+
+          foreach ($object in $objects) {
+            Copy-Item `
+              -Path $object.FullName `
+              -Destination $releaseDirectory `
+              -Force
+          }
+
+          Write-Host "Files included in the artifact:"
+
+          Get-ChildItem `
+            -Path $artifactRoot `
+            -File `
+            -Recurse |
+          ForEach-Object {
+            $relativePath = $_.FullName.Substring(
+              $artifactRoot.Length + 1
+            )
+
+            Write-Host "$relativePath [$($_.Length) bytes]"
+          }
+          
+      # ---------------------------------------------------------------
+      # 10. Upload separate x64 and x86 artifacts
+      # ---------------------------------------------------------------
+      - name: Upload ${{ matrix.arch }} BOF artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 30

@@ -141,3 +141,15 @@ ModLoad: 00007ffa`91050000 00007ffa`91058000   C:\Windows\System32\NSI.dll
 DRAUGR: Return value: 0x0000000000CC0008
 SLEEPMASK: Unmasking Section - Address: 0000000000C40000
 ```
+
+### GitHub Workflow
+
+This GitHub Actions workflow automates the compilation of the Sleepmask-VS Kit with a single click. It builds both the x64 and x86 versions on a GitHub-hosted Windows runner using Visual Studio Build Tools, packages the compiled Beacon Object Files (BOFs) into separate ZIP archives while preserving the expected directory structure (x64/Release and x86/Release), and uploads them as downloadable artifacts. This allows anyone to generate the latest binaries without installing Visual Studio or configuring a Windows build environment locally.
+
+How to use it:
+
+- Fork the repository.
+- Open the Actions tab in your fork.
+- Select the `Build Sleepmask-VS` workflow.
+- Click Run workflow.
+- Once it finishes, download the generated artifacts.
